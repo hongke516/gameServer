@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+var app = require('../app');
+var debug = require('debug')('server:server');
+var http = require('http');
+var msgHandler = require('../service/msgHandler');
+// 引入WebSocket模块
+var WebSocketServer = require('websocket').server;
+/**
+ * Get port from environment and store in Express.
+ */
+
+var port = normalizePort(process.env.PORT || '3000');
+app.set('port', port);
+
+/**
+ * Create HTTP server.
+ */
+
+var server = http.createServer(app);
+
+/**
+ * create websocket.
+ */
+var ws = new WebSocketServer({
+  httpServer: server,
+  autoAcceptConnections: false
+});
+function originIsAllowed(origin) {
+  // put logic here to detect whether the specified origin is allowed.
+  return true;
+}
+var connections = []
+function broadcast(msg) {
+  connections.forEach(function(connection) {
+    console.log('broadcast', msg)
+    connection.sendUTF(JSON.stringify(msg));
+  })
+}
+ws.on('request', function(request) {
+  if (!originIsAllowed(request.origin)) {
+    // Make sure we only accept requests from an allowed origin
+    request.reject();
+    console.log((new Date()) + ' Connection from origin ' + request.origin + ' rejected.');
+    return;
+  }
+
+  var connection = request.accept('echo-protocol', request.origin);
+  connections.push(connection)
+  console.log((new Date()) + ' Connection accepted.');
+  connection.on('message', function(message) {
+    if (message.type === 'utf8') {
+      console.log('Received Message: ' + message.utf8Data);
+      var data = JSON.parse(message.utf8Data)
+      var msg = data
+      if (data.action === 'online') {
+        msgHandler.online(data.id)
+        connection.userId = data.id
+        console.log('msg', msgHandler.users)
+        msg.users = msgHandler.users;
+      } else if (data.action === 'gainScore') {
+        let user = msgHandler.gainScore(data)
+        msg.user = user;
+      }
+      // connection.sendUTF(JSON.stringify(msg));
+      broadcast(msg);
+    }
+    else if (message.type === 'binary') {
+      console.log('Received Binary Message of ' + message.binaryData.length + ' bytes');
+      connection.sendBytes(message.binaryData);
+    }
+  });
+  connection.on('close', function(reasonCode, description) {
+    console.log('close:')
+    connections = connections.filter(c => c.userId != connection.userId);
+    msgHandler.offline(connection.userId)
+    var msg ={
+      action: 'offline',
+      users: msgHandler.users
+    }
+    broadcast(msg);
+    console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.');
+  });
+});
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+server.listen(port);
+server.on('error', onError);
+server.on('listening', onListening);
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+
+  var bind = typeof port === 'string'
+    ? 'Pipe ' + port
+    : 'Port ' + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  debug('Listening on ' + bind);
+}
